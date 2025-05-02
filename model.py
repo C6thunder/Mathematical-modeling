@@ -1,63 +1,42 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.integrate import solve_ivp, odeint, trapezoid
-from scipy.optimize import minimize, curve_fit
+from scipy.integrate import solve_ivp, odeint
 from scipy.special import erfc
 import pandas as pd
 import seaborn as sns
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
 from sklearn.preprocessing import StandardScaler
 import xgboost as xgb
 
-# Model parameters (example values)
-D = 1e-6       # Diffusion coefficient in cm^2/s
-P = 1e-4       # Permeability coefficient in cm/s
-A = 10         # Patch area in cm^2
-L = 0.1        # Skin thickness in cm
-Vb = 5000      # Blood volume in mL
-kelim = 0.1    # Elimination rate constant in 1/h
-C0 = 100       # Initial concentration at surface in ug/cm^2
+# 定义药物动力学模型（例如，双层皮肤模型）
+def model(t, y, params):
+    Cs_S, Cs_L = y
+    k1, k2, k3 = params  # 假设有3个关键参数：皮肤上层渗透率，皮肤下层渗透率，药物消除速率
+    dCs_S_dt = -k1 * Cs_S
+    dCs_L_dt = k1 * Cs_S - k2 * Cs_L
+    return [dCs_S_dt, dCs_L_dt]
 
-# Time span (in hours)
-t_span = [0, 24]
-t_eval = np.linspace(t_span[0], t_span[1], 500)
+# 参数设定
+params = [0.1, 0.05, 0.01]  # 假设皮肤渗透率较低，尝试调整这些参数
 
-# Define ODEs using erfc to model lag time
-def dCb_dt(t, y):
-    Cb = y[0]
-    if t == 0:
-        Cs_L = 0
-    else:
-        Cs_L = C0 * erfc(L / (2 * np.sqrt(D * t)))
-    dCb = (P * A * (Cs_L - Cb) - kelim * Vb * Cb) / Vb
-    return [dCb]
+# 初始条件：假设皮肤表面有少量药物
+initial_conditions = [1, 0]  # 皮肤表面浓度初始为1，皮肤下层浓度为0
 
-def simulate_cb(A_patch):
-    global A
-    A = A_patch
-    sol = solve_ivp(dCb_dt, t_span, [0], t_eval=t_eval, method='RK45')
-    return sol.t, sol.y[0]
+# 时间区间设定
+t_span = (0, 10)  # 从0到10小时
+t_eval = np.linspace(0, 10, 100)  # 时间步长100
 
-# Objective for optimization: Keep Cmax <= 15 ng/mL
-def objective(A_patch):
-    t, cb = simulate_cb(A_patch)
-    if np.max(cb) > 15:
-        return 1e6 + np.max(cb)  # Penalty
-    return trapezoid(cb, t)  # Maximize AUC under constraint
+# 使用solve_ivp进行求解
+solution = solve_ivp(model, t_span, initial_conditions, args=(params,), t_eval=t_eval, method='RK45')
 
-res = minimize(objective, x0=[10], bounds=[(5, 20)], method='L-BFGS-B')
-
-# Plot result
-t, cb = simulate_cb(res.x[0])
-plt.plot(t, cb)
-plt.axhline(15, color='r', linestyle='--', label='Cmax limit')
-plt.xlabel('Time (h)')
-plt.ylabel('Plasma Concentration (ng/mL)')
-plt.title(f'Optimal Patch Area: {res.x[0]:.2f} cm²')
+# 输出结果
+plt.plot(solution.t, solution.y[0], label='Cs_S (皮肤上层浓度)')
+plt.plot(solution.t, solution.y[1], label='Cs_L (皮肤下层浓度)')
+plt.xlabel('时间 (小时)')
+plt.ylabel('药物浓度 (ng/mL)')
 plt.legend()
-plt.grid()
 plt.show()
 
 # Predict dose by regression function (example)
@@ -148,6 +127,10 @@ if '副作用评分(1-5)' in df.columns and len(features) > 1:
 
     print("\n🧱 混淆矩阵：")
     print(confusion_matrix(y_test, y_pred))
+
+    # Calculate accuracy
+    accuracy = accuracy_score(y_test, y_pred)
+    print(f"\n📊 模型精度：{accuracy * 100:.2f}%")
 
     importances = best_xgb_model.feature_importances_
     sorted_idx = np.argsort(importances)
